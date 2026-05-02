@@ -5,119 +5,41 @@ from datetime import datetime
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ConversationHandler, ContextTypes
 
-# Attempt to import Google Sheets libraries (optional)
-try:
-    import gspread
-    from oauth2client.service_account import ServiceAccountCredentials
-    import json
+# Get token from environment variable (with fallback for testing)
+TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '8211925477:AAF1Kh6SX26cxwAyTKIlQu3uUIuFpzWBjcg')
 
-    GOOGLE_SHEETS_AVAILABLE = True
-except ImportError:
-    GOOGLE_SHEETS_AVAILABLE = False
-    print("⚠️ Google Sheets libraries not installed. Running in CSV-only mode.")
+# Use a writable directory on Render
+CSV_FILE = "/tmp/graduate_students.csv"  # /tmp is always writable
 
-# Telegram Bot Token
-TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', "8211925477:AAF1Kh6SX26cxwAyTKIlQu3uUIuFpzWBjcg")
+# Conversation states
+(NAME, EMAIL, PHONE, UNIVERSITY, CGPA, SKILLS, EXPERIENCE, PROJECTS,
+ GITHUB, LINKEDIN, DESIRED_ROLE, AVAILABILITY, EXPECTED_SALARY,
+ RESUME_LINK, VISA_STATUS) = range(15)
 
-# CSV file setup
-CSV_FILE = "graduate_students.csv"
-
-
-# Google Sheets setup (optional)
-def setup_google_sheets():
-    """Initialize Google Sheets connection (returns None if not configured)"""
-    if not GOOGLE_SHEETS_AVAILABLE:
-        return None
-
-    try:
-        # Try to get credentials from environment variable (for Render deployment)
-        creds_json = os.getenv('GOOGLE_CREDENTIALS')
-
-        if creds_json:
-            # Use credentials from environment variable
-            creds_dict = json.loads(creds_json)
-            scope = ['https://spreadsheets.google.com/feeds',
-                     'https://www.googleapis.com/auth/drive']
-            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-            client = gspread.authorize(creds)
-            print("✅ Google Sheets connected successfully")
-            return client
-        else:
-            print("⚠️ No Google credentials found. Running in CSV-only mode.")
-            return None
-    except Exception as e:
-        print(f"⚠️ Google Sheets setup error: {e}")
-        return None
-
-
-# Get Google Sheet URL from environment variable
-SHEET_URL = os.getenv('GOOGLE_SHEET_URL', '')
-
-
-def save_to_google_sheets(student_data):
-    """Save data to Google Sheets (silent fail if not configured)"""
-    if not GOOGLE_SHEETS_AVAILABLE or not SHEET_URL:
-        return False
-
-    try:
-        client = setup_google_sheets()
-        if not client:
-            return False
-
-        # Open the spreadsheet
-        sheet = client.open_by_url(SHEET_URL).sheet1
-
-        # Prepare the row with timestamp
-        row = [datetime.now().strftime("%Y-%m-%d %H:%M:%S")] + student_data
-
-        # Add row to Google Sheets
-        sheet.append_row(row)
-        print(f"✅ Saved to Google Sheets: {student_data[0]}")
-        return True
-    except Exception as e:
-        print(f"⚠️ Could not save to Google Sheets: {e}")
-        return False
-
+def init_csv():
+    """Initialize CSV file with headers"""
+    headers = [
+        'Timestamp', 'Name', 'Email', 'Phone', 'University', 'CGPA',
+        'Technical Skills', 'Experience', 'Key Projects',
+        'GitHub/Portfolio', 'LinkedIn', 'Desired Role',
+        'Availability', 'Expected Salary', 'Resume Link', 'Visa Status'
+    ]
+    
+    file_exists = os.path.exists(CSV_FILE)
+    if not file_exists:
+        with open(CSV_FILE, 'w', newline='', encoding='utf-8') as file:
+            writer = csv.writer(file)
+            writer.writerow(headers)
+            print(f"✅ Created CSV file at {CSV_FILE}")
+    else:
+        print(f"📁 CSV file already exists at {CSV_FILE}")
 
 def save_to_csv(student_data):
     """Save data to CSV file"""
     with open(CSV_FILE, 'a', newline='', encoding='utf-8') as file:
         writer = csv.writer(file)
         writer.writerow([datetime.now().strftime("%Y-%m-%d %H:%M:%S")] + student_data)
-    print(f"✅ Saved to CSV: {student_data[0]}")
-
-
-def save_data(student_data):
-    """Save data to CSV and optionally Google Sheets"""
-    # Always save to CSV
-    save_to_csv(student_data)
-
-    # Try to save to Google Sheets if configured
-    if GOOGLE_SHEETS_AVAILABLE and SHEET_URL:
-        save_to_google_sheets(student_data)
-
-
-# Conversation states - 15 states (0 to 14)
-(NAME, EMAIL, PHONE, UNIVERSITY, CGPA, SKILLS, EXPERIENCE, PROJECTS,
- GITHUB, LINKEDIN, DESIRED_ROLE, AVAILABILITY, EXPECTED_SALARY,
- RESUME_LINK, VISA_STATUS) = range(15)
-
-
-# Initialize CSV file with headers
-def init_csv():
-    headers = [
-        'Timestamp', 'Name', 'Email', 'Phone', 'University', 'CGPA',
-        'Technical Skills', 'Experience (Years & Roles)', 'Key Projects',
-        'GitHub/Portfolio', 'LinkedIn', 'Desired Role',
-        'Availability (Join/Interview)', 'Expected Salary', 'Resume/CV Link', 'Visa Status'
-    ]
-
-    if not os.path.exists(CSV_FILE):
-        with open(CSV_FILE, 'w', newline='', encoding='utf-8') as file:
-            writer = csv.writer(file)
-            writer.writerow(headers)
-            print(f"✅ Created CSV file: {CSV_FILE}")
-
+    print(f"✅ Saved data for: {student_data[0]}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_msg = (
@@ -130,32 +52,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(welcome_msg, parse_mode='Markdown')
     return NAME
 
-
-async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send the CSV file to authorized users"""
-    if not os.path.exists(CSV_FILE):
-        await update.message.reply_text("📭 No data available yet.")
-        return
-
-    # Count entries
-    with open(CSV_FILE, 'r', encoding='utf-8') as file:
-        reader = csv.reader(file)
-        row_count = sum(1 for row in reader) - 1
-
-    # Send CSV file
-    with open(CSV_FILE, 'rb') as file:
-        await update.message.reply_document(
-            document=file,
-            filename=f"candidates_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            caption=f"📊 Total candidates: {row_count}"
-        )
-
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("❌ Cancelled. Send /start to begin again.")
+    return ConversationHandler.END
 
 async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['name'] = update.message.text
     await update.message.reply_text("What's your *email address*?", parse_mode='Markdown')
     return EMAIL
-
 
 async def get_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     email = update.message.text
@@ -166,18 +70,15 @@ async def get_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Your *phone number* (with country code):", parse_mode='Markdown')
     return PHONE
 
-
 async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['phone'] = update.message.text
     await update.message.reply_text("🎓 *Education*\n\nWhat's your *University name*?", parse_mode='Markdown')
     return UNIVERSITY
 
-
 async def get_university(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['university'] = update.message.text
     await update.message.reply_text("What's your *CGPA*? (e.g., 3.8/4.0)", parse_mode='Markdown')
     return CGPA
-
 
 async def get_cgpa(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['cgpa'] = update.message.text
@@ -187,7 +88,6 @@ async def get_cgpa(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown')
     return SKILLS
 
-
 async def get_skills(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['skills'] = update.message.text
     await update.message.reply_text(
@@ -196,7 +96,6 @@ async def get_skills(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown')
     return EXPERIENCE
 
-
 async def get_experience(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['experience'] = update.message.text
     await update.message.reply_text(
@@ -204,25 +103,21 @@ async def get_experience(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown')
     return PROJECTS
 
-
 async def get_projects(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['projects'] = update.message.text
     await update.message.reply_text("🔗 *GitHub/Portfolio link*:", parse_mode='Markdown')
     return GITHUB
-
 
 async def get_github(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['github'] = update.message.text
     await update.message.reply_text("🔗 *LinkedIn profile URL*:", parse_mode='Markdown')
     return LINKEDIN
 
-
 async def get_linkedin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['linkedin'] = update.message.text
     await update.message.reply_text("🎯 *Desired role* (e.g., Software Engineer, Data Scientist):",
                                     parse_mode='Markdown')
     return DESIRED_ROLE
-
 
 async def get_desired_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['desired_role'] = update.message.text
@@ -232,33 +127,27 @@ async def get_desired_role(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown')
     return AVAILABILITY
 
-
 async def get_availability(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['availability'] = update.message.text
     await update.message.reply_text("💰 *Expected salary* (or 'Negotiable'):", parse_mode='Markdown')
     return EXPECTED_SALARY
-
 
 async def get_expected_salary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['expected_salary'] = update.message.text
     await update.message.reply_text("📄 *Resume/CV link* (Google Drive, Dropbox, etc.):", parse_mode='Markdown')
     return RESUME_LINK
 
-
 async def get_resume_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['resume_link'] = update.message.text
-
     keyboard = [['Need Visa Sponsorship', 'No Sponsorship Needed', 'Have Valid Work Visa']]
     reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
     await update.message.reply_text("🛂 *Visa Status*\n\nWhat's your work authorization status?",
                                     reply_markup=reply_markup, parse_mode='Markdown')
     return VISA_STATUS
 
-
 async def get_visa_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['visa_status'] = update.message.text
 
-    # Prepare data for CSV (15 fields)
     student_data = [
         context.user_data.get('name', ''),
         context.user_data.get('email', ''),
@@ -277,44 +166,48 @@ async def get_visa_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.get('visa_status', '')
     ]
 
-    # Save data
-    save_data(student_data)
+    save_to_csv(student_data)
 
     summary = (
         "✅ *Profile Complete! Your information has been recorded.*\n\n"
         f"📋 *Summary*\n"
         f"• Name: {context.user_data.get('name', 'N/A')}\n"
         f"• Role: {context.user_data.get('desired_role', 'N/A')}\n"
-        f"• University: {context.user_data.get('university', 'N/A')} (CGPA: {context.user_data.get('cgpa', 'N/A')})\n"
-        f"• Skills: {context.user_data.get('skills', 'N/A')[:50]}...\n"
-        f"• Experience: {context.user_data.get('experience', 'N/A')}\n\n"
+        f"• University: {context.user_data.get('university', 'N/A')}\n"
+        f"• Skills: {context.user_data.get('skills', 'N/A')[:50]}...\n\n"
         "Our hiring team will review your profile and contact you soon!\n\n"
-        "Best of luck with your job search! 🚀"
+        "Best of luck! 🚀"
     )
 
     remove_keyboard = ReplyKeyboardMarkup([[]], resize_keyboard=True)
     await update.message.reply_text(summary, parse_mode='Markdown', reply_markup=remove_keyboard)
     return ConversationHandler.END
 
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("❌ Cancelled. Send /start to begin again.")
-    return ConversationHandler.END
-
+async def export_data(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send CSV file to authorized users"""
+    if not os.path.exists(CSV_FILE):
+        await update.message.reply_text("📭 No data available yet.")
+        return
+    
+    # Count entries (subtract header)
+    with open(CSV_FILE, 'r', encoding='utf-8') as file:
+        reader = csv.reader(file)
+        row_count = sum(1 for row in reader) - 1
+    
+    with open(CSV_FILE, 'rb') as file:
+        await update.message.reply_document(
+            document=file,
+            filename=f"candidates_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            caption=f"📊 Total candidates: {row_count}\n\nType /start to register"
+        )
 
 def main():
     print("🚀 Starting Graduate Hire Bot...")
-    print(f"📁 CSV will be saved to: {CSV_FILE}")
-
+    print(f"📁 Using CSV file: {CSV_FILE}")
+    
     # Initialize CSV
     init_csv()
-
-    # Check Google Sheets configuration
-    if GOOGLE_SHEETS_AVAILABLE and SHEET_URL:
-        print("📊 Google Sheets integration ENABLED")
-    else:
-        print("⚠️ Google Sheets integration DISABLED (running in CSV-only mode)")
-
+    
     # Create application
     app = Application.builder().token(TOKEN).build()
 
@@ -341,17 +234,15 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)]
     )
 
-    # Add handlers
     app.add_handler(CommandHandler("export", export_data))
     app.add_handler(conv_handler)
 
-    print("🤖 Bot is running...")
-    print("📱 Send /start on Telegram to begin.")
+    print("🤖 Bot is running successfully!")
+    print("📱 Send /start on Telegram to begin")
     print("📤 Recruiters can use /export to download data")
-
+    
     # Start the bot
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
