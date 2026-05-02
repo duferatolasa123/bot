@@ -6,7 +6,7 @@ from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ConversationHandler, ContextTypes
 
 # Get token from environment variable (with fallback for testing)
-TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '8211925477:AAF1Kh6SX26cxwAyTKIlQu3uUIuFpzWBjcg')
+TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '8211925477:AAFM5HwcZUYFy9QJKatxtQXE-NwFEdHgX5I')
 
 # Use a writable directory on Render
 CSV_FILE = "/tmp/graduate_students.csv"
